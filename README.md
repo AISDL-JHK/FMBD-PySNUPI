@@ -1,17 +1,26 @@
-# FMBD
+# FMBD-SNUPI
 
-`FMBD` is an independent runtime package for flexible multibody Brownian
-dynamics.  SNUPY remains an offline preprocessor that produces reduced-order
+`FMBD-SNUPI` is an independent runtime package for flexible multibody Brownian
+dynamics. PySNUPI remains an offline preprocessor that produces reduced-order
 body data; this package owns reconstruction, interactions, dynamics, protocols
 and output orchestration.
 
+The distribution name is `FMBD-SNUPI`; the Python import namespace remains
+`FMBD`:
+
+```python
+from FMBD import FMBDSystem
+```
+
 Internal units are nm, pN, ps, pN nm and rad.
 
-The first migration milestone provides the stable body-data schema and core
-geometry/force abstractions.  The reference implementation remains
-`../switch_cycle.py` until its deterministic trajectory regression is migrated.
+The package provides a stable body-data schema, geometry and force
+abstractions, NumPy/SciPy CPU execution, CuPy CUDA execution, and an isolated
+legacy Torch implementation.
 
-Install `FMBD[trajectory]` when PDB/DCD trajectory observers are required.
+From the repository root, install with
+`python -m pip install -e ".[trajectory]"` when PDB/DCD trajectory observers
+are required.
 
 For Debye-Hückel interactions, CPU runs build cross-body neighbor lists with
 SciPy `cKDTree`. CUDA runs use a CuPy cell-list kernel and retain candidate

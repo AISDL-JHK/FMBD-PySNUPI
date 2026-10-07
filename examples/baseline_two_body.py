@@ -1,14 +1,13 @@
-"""Minimal reusable FMBD application template.
+"""Minimal reusable FMBD-SNUPI application template.
 
 Before running, replace the two ``.bodyrom`` paths and the selected node pairs
 with data for your experiment.  Create a ``.bodyrom`` artifact once from an
-offline MOR output; the simulation runtime should load the artifact, not SNUPY.
+offline MOR output; the simulation runtime should load the artifact, not PySNUPI.
 """
 
 from __future__ import annotations
 
 import numpy as np
-import torch
 
 from FMBD import (
     Body,
@@ -23,23 +22,30 @@ from FMBD import (
     PDBTopologyWriter,
     Simulation,
 )
+from FMBD.backend import to_numpy
 from FMBD.interaction import DebyeHuckelInteraction, MorsePairInteraction
 from FMBD.protocol import PiecewiseProtocol
 
 
 def main() -> None:
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    dtype = torch.float64
+    # NumPy/SciPy runs on CPU. Change this to "cuda" to use CuPy on device 0.
+    backend = "cpu"
+    device = 0
+    dtype = np.float64
 
     # Offline artifacts.  Export these once with BodyModel.save(...).
-    model_a = BodyModel.load("body_a.bodyrom", device=device, dtype=dtype)
-    model_b = BodyModel.load("body_b.bodyrom", device=device, dtype=dtype)
+    model_a = BodyModel.load(
+        "body_a.bodyrom", backend=backend, device=device, dtype=dtype,
+    )
+    model_b = BodyModel.load(
+        "body_b.bodyrom", backend=backend, device=device, dtype=dtype,
+    )
 
     # Runtime state: q is flexible deformation; R/c are rigid pose.
     state_a = BodyState.at_reference(model_a)
     state_b = BodyState.at_reference(
         model_b,
-        c=torch.tensor([10.0, 0.0, 0.0], device=device, dtype=dtype),
+        c=model_b.xp.asarray([10.0, 0.0, 0.0], dtype=dtype),
     )
 
     system = FMBDSystem()
@@ -72,11 +78,13 @@ def main() -> None:
         PDBTopologyWriter("output/system.pdb", inter_body_bonds=[InterBodyBond("a", 0, "b", 0)]),
         DCDTrajectoryWriter("output/trajectory.dcd", every=1_000),
     ]
-    simulation = Simulation(system, protocol, integrator, observers=observers)
+    simulation = Simulation(
+        system, protocol, integrator, observers=observers, output_dir="output",
+    )
 
     def report(result) -> None:
         if (result.context.step + 1) % 1_000 == 0:
-            total = sum(float(value.detach().cpu()) for value in result.energies.values())
+            total = sum(float(to_numpy(value)) for value in result.energies.values())
             print(f"step={result.context.step + 1:7d}  Mg={result.context.environment['Mg_mM']:4.1f} mM  E={total:.5e}")
 
     simulation.run(diagnostics_every=1_000, callback=report)
