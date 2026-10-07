@@ -6,12 +6,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import torch
+import numpy as np
+
+from FMBD.legacy_numpy_cupy.backend import to_numpy
 
 
 def _scalar(value: Any) -> float | None:
-    if isinstance(value, torch.Tensor) and value.numel() == 1:
-        return float(value.detach().cpu())
+    if np.isscalar(value):
+        return float(value)
+    if getattr(value, "size", None) == 1:
+        return float(to_numpy(value).reshape(()))
     if isinstance(value, (int, float)):
         return float(value)
     return None

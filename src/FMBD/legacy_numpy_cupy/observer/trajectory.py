@@ -9,6 +9,8 @@ import warnings
 
 import numpy as np
 
+from FMBD.legacy_numpy_cupy.backend import to_numpy
+
 
 @dataclass(frozen=True)
 class InterBodyBond:
@@ -130,7 +132,7 @@ class PDBTopologyWriter:
                 topology = _snupy_topology(body)
                 chain = topology["chain_id"] if topology is not None else chr(ord("A") + chain_index % 26)
                 resname = name[:3].upper().ljust(3, "X")
-                xyz = body.reconstruction.x.detach().cpu().numpy() * self.coordinate_scale
+                xyz = to_numpy(body.reconstruction.x) * self.coordinate_scale
                 for index, (x, y, z) in enumerate(xyz):
                     x_field = _format_pdb_coordinate(float(x))
                     y_field = _format_pdb_coordinate(float(y))
@@ -197,7 +199,7 @@ class DCDTrajectoryWriter:
     def _write(self, simulation: Any, step: int) -> None:
         if self._writer is None or self._universe is None:
             raise RuntimeError("DCD writer has not been initialized")
-        xyz = np.concatenate([body.reconstruction.x.detach().cpu().numpy() for body in simulation.system.bodies.values()], axis=0)
+        xyz = np.concatenate([to_numpy(body.reconstruction.x) for body in simulation.system.bodies.values()], axis=0)
         self._universe.atoms.positions = xyz * 10.0
         self._universe.dimensions = np.array([0.0, 0.0, 0.0, 90.0, 90.0, 90.0], dtype=np.float32)
         # FMBD systems are non-periodic unless an application provides box

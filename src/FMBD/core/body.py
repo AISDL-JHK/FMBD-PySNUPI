@@ -1,4 +1,4 @@
-"""NumPy/CuPy reduced body models and mutable runtime state."""
+"""Immutable reduced body models and mutable runtime body state."""
 
 from __future__ import annotations
 
@@ -8,9 +8,10 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import torch
 
-from FMBD.backend import ArrayBackend, array_module, resolve_backend, to_numpy
 from FMBD.math.so3 import exp_so3_batch
+
 
 BODY_ROM_SCHEMA = "fmbd.body_rom"
 BODY_ROM_VERSION = 1
@@ -30,48 +31,37 @@ def _normalize_connectivity(value: Any, n_node: int) -> np.ndarray:
 
 @dataclass(frozen=True)
 class BodyModel:
-    """Static reduced body data stored as NumPy (CPU) or CuPy (CUDA) arrays."""
+    """Static reduced-order description of one flexible body.
+
+    Tensor units are nm, pN, ps, pN nm and rad.  The model deliberately holds
+    no pose or modal state, so it can be shared by multiple runtime bodies.
+    """
 
     name: str
-    X: Any
-    Q0: Any
-    phi: Any
-    phi_pos: Any
-    phi_rot: Any
-    K: Any
-    Gamma: Any
-    mu: Any
-    S: Any
-    Bq: Any
-    Z_rigid: Any
-    mu_rigid: Any
-    S_rigid: Any
-    rigid_reference_center: Any
+    X: torch.Tensor
+    Q0: torch.Tensor
+    phi: torch.Tensor
+    phi_pos: torch.Tensor
+    phi_rot: torch.Tensor
+    K: torch.Tensor
+    Gamma: torch.Tensor
+    mu: torch.Tensor
+    S: torch.Tensor
+    Bq: torch.Tensor
+    Z_rigid: torch.Tensor
+    mu_rigid: torch.Tensor
+    S_rigid: torch.Tensor
+    rigid_reference_center: torch.Tensor
     connectivity: np.ndarray
     metadata: dict[str, Any] = field(default_factory=dict)
-    modal_mean_force: Any | None = None
-    respod_psi: Any | None = None
-    respod_ou_rho: Any | None = None
-    respod_ou_sigma: Any | None = None
+    # Optional equilibrium closure exported by SNUPY's FMBD_data.pkl.
+    # ``modal_mean_force`` shifts the NMA equilibrium; ``respod_*`` describe
+    # zero-mean local residual fluctuations and are intentionally immutable.
+    modal_mean_force: torch.Tensor | None = None
+    respod_psi: torch.Tensor | None = None
+    respod_ou_rho: torch.Tensor | None = None
+    respod_ou_sigma: torch.Tensor | None = None
     closure_dt_ps: float | None = None
-
-    @property
-    def xp(self):
-        return array_module(self.X)
-
-    @property
-    def backend(self) -> str:
-        return "cuda" if self.xp is not np else "cpu"
-
-    @property
-    def device(self) -> str:
-        if self.backend == "cpu":
-            return "cpu"
-        return f"cuda:{int(self.X.device.id)}"
-
-    @property
-    def dtype(self):
-        return self.X.dtype
 
     @property
     def n_node(self) -> int:
@@ -86,160 +76,222 @@ class BodyModel:
         return 0 if self.respod_psi is None else int(self.respod_psi.shape[1])
 
     def to_dict(self) -> dict[str, Any]:
-        names = ("X", "Q0", "phi", "phi_pos", "phi_rot", "K", "Gamma", "mu", "S", "Bq", "Z_rigid", "mu_rigid", "S_rigid", "rigid_reference_center")
-        data = {name: to_numpy(getattr(self, name)).copy() for name in names}
-        data.update({"schema": BODY_ROM_SCHEMA, "version": BODY_ROM_VERSION, "name": self.name, "connectivity": self.connectivity.copy(), "metadata": dict(self.metadata)})
-        for name in ("modal_mean_force", "respod_psi", "respod_ou_rho", "respod_ou_sigma"):
-            value = getattr(self, name)
-            if value is not None:
-                data[name] = to_numpy(value).copy()
+        """Return a portable, versioned dictionary—not a pickled class instance."""
+        tensor_names = (
+            "X", "Q0", "phi", "phi_pos", "phi_rot", "K", "Gamma", "mu", "S", "Bq",
+            "Z_rigid", "mu_rigid", "S_rigid", "rigid_reference_center",
+        )
+        data = {name: getattr(self, name).detach().cpu().numpy().copy() for name in tensor_names}
+        data.update({
+            "schema": BODY_ROM_SCHEMA,
+            "version": BODY_ROM_VERSION,
+            "name": self.name,
+            "connectivity": self.connectivity.copy(),
+            "metadata": dict(self.metadata),
+        })
+        if self.modal_mean_force is not None:
+            data["modal_mean_force"] = self.modal_mean_force.detach().cpu().numpy().copy()
         if self.respod_psi is not None:
+            data["respod_psi"] = self.respod_psi.detach().cpu().numpy().copy()
+            data["respod_ou_rho"] = self.respod_ou_rho.detach().cpu().numpy().copy()
+            data["respod_ou_sigma"] = self.respod_ou_sigma.detach().cpu().numpy().copy()
             data["closure_dt_ps"] = self.closure_dt_ps
         return data
 
     def save(self, path: str | Path) -> None:
-        with Path(path).open("wb") as stream:
-            pickle.dump(self.to_dict(), stream, protocol=pickle.HIGHEST_PROTOCOL)
+        with Path(path).open("wb") as fh:
+            pickle.dump(self.to_dict(), fh, protocol=pickle.HIGHEST_PROTOCOL)
 
     @classmethod
-    def load(cls, path: str | Path, *, backend: str = "cpu", device: int = 0, dtype=np.float64) -> "BodyModel":
-        with Path(path).open("rb") as stream:
-            return cls.from_dict(pickle.load(stream), backend=backend, device=device, dtype=dtype)
+    def load(cls, path: str | Path, *, device: str | torch.device = "cpu", dtype: torch.dtype = torch.float64) -> "BodyModel":
+        with Path(path).open("rb") as fh:
+            data = pickle.load(fh)
+        return cls.from_dict(data, device=device, dtype=dtype)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any], *, backend: str = "cpu", device: int = 0, dtype=np.float64) -> "BodyModel":
+    def from_dict(cls, data: dict[str, Any], *, device: str | torch.device = "cpu", dtype: torch.dtype = torch.float64) -> "BodyModel":
         if data.get("schema") != BODY_ROM_SCHEMA:
-            raise ValueError("not an FMBD BodyModel artifact; use from_fmbd_data for SNUPY MOR data")
+            raise ValueError("not an FMBD BodyModel artifact; use from_legacy_mor_data for SNUPY MOR data")
         if data.get("version") != BODY_ROM_VERSION:
             raise ValueError(f"unsupported BodyModel version: {data.get('version')!r}")
-        xp_backend = resolve_backend(backend, device)
-        with xp_backend.context():
-            xp = xp_backend.xp
-            names = ("X", "Q0", "phi", "phi_pos", "phi_rot", "K", "Gamma", "mu", "S", "Bq", "Z_rigid", "mu_rigid", "S_rigid", "rigid_reference_center")
-            arrays = {name: xp.asarray(data[name], dtype=dtype) for name in names}
-            optional = {name: None if data.get(name) is None else xp.asarray(data[name], dtype=dtype) for name in ("modal_mean_force", "respod_psi", "respod_ou_rho", "respod_ou_sigma")}
-            model = cls(
-                name=str(data["name"]), connectivity=_normalize_connectivity(data["connectivity"], arrays["X"].shape[0]),
-                metadata=dict(data.get("metadata", {})), closure_dt_ps=data.get("closure_dt_ps"), **arrays, **optional,
-            )
+        dev = torch.device(device)
+        required = ("name", "X", "Q0", "phi", "phi_pos", "phi_rot", "K", "Gamma", "mu", "S", "Bq", "Z_rigid", "mu_rigid", "S_rigid", "rigid_reference_center", "connectivity")
+        missing = [key for key in required if key not in data]
+        if missing:
+            raise KeyError(f"BodyModel artifact is missing fields: {missing}")
+        tensor_names = required[1:-1]
+        tensors = {name: torch.as_tensor(data[name], device=dev, dtype=dtype) for name in tensor_names}
+        optional = {
+            "modal_mean_force": None if data.get("modal_mean_force") is None else torch.as_tensor(data["modal_mean_force"], device=dev, dtype=dtype),
+            "respod_psi": None if data.get("respod_psi") is None else torch.as_tensor(data["respod_psi"], device=dev, dtype=dtype),
+            "respod_ou_rho": None if data.get("respod_ou_rho") is None else torch.as_tensor(data["respod_ou_rho"], device=dev, dtype=dtype),
+            "respod_ou_sigma": None if data.get("respod_ou_sigma") is None else torch.as_tensor(data["respod_ou_sigma"], device=dev, dtype=dtype),
+            "closure_dt_ps": data.get("closure_dt_ps"),
+        }
+        model = cls(name=str(data["name"]), connectivity=np.asarray(data["connectivity"], dtype=np.int64), metadata=dict(data.get("metadata", {})), **tensors, **optional)
         model._validate()
         return model
 
     @classmethod
-    def from_fmbd_data(cls, path: str | Path, *, name: str | None = None, backend: str = "cpu", device: int = 0, dtype=np.float64) -> "BodyModel":
-        """Load the stable ``snupy.mor_fmbd_input`` artifact."""
-        with Path(path).open("rb") as stream:
-            data = pickle.load(stream)
+    def from_fmbd_data(cls, path: str | Path, *, name: str | None = None, device: str | torch.device = "cpu", dtype: torch.dtype = torch.float64) -> "BodyModel":
+        """Load a SNUPY-prepared ``FMBD_data.pkl`` artifact.
+
+        This adapter is the boundary between SNUPY offline preparation and the
+        independent FMBD runtime. It contains no SNUPY imports.
+        """
+        with Path(path).open("rb") as fh:
+            data = pickle.load(fh)
         if data.get("schema") != "snupy.mor_fmbd_input":
             raise ValueError("not a SNUPY FMBD_data artifact")
-        node = np.asarray(data["init_node"], dtype=np.float64)
-        if node.ndim != 2 or node.shape[1] < 6:
+        dev = torch.device(device)
+        init_node = np.asarray(data["init_node"], dtype=np.float64)
+        if init_node.ndim != 2 or init_node.shape[1] < 6:
             raise ValueError("FMBD_data init_node must have shape (N, >=6)")
-        n = len(node)
-        xp_backend = resolve_backend(backend, device)
-        with xp_backend.context():
-            xp = xp_backend.xp
-            arr = lambda v: xp.asarray(v, dtype=dtype)
-            phi = arr(data["phi"])
-            if phi.shape[0] != 6 * n:
-                raise ValueError("FMBD_data phi is incompatible with init_node")
-            phi_node = phi.reshape(n, 6, -1)
-            K, Gamma = arr(data["K_r"]), arr(data["Gamma_r"])
-            K, Gamma = (K + K.T) * 0.5, (Gamma + Gamma.T) * 0.5
-            mu = arr(data["mu_r"]) if "mu_r" in data else xp.linalg.pinv(Gamma)
-            mu = (mu + mu.T) * 0.5
-            residual = bool(data.get("closure_enabled", False))
-            model = cls(
-                name=name or str(data.get("name", Path(path).stem)),
-                X=arr(node[:, :3]), Q0=exp_so3_batch(arr(node[:, 3:6])),
-                phi=phi, phi_pos=phi_node[:, :3], phi_rot=phi_node[:, 3:],
-                K=K, Gamma=Gamma, mu=mu, S=arr(data["S_r"]), Bq=arr(data.get("Bq", mu @ arr(data["S_r"]))),
-                Z_rigid=(arr(data["Z_rigid"]) + arr(data["Z_rigid"]).T) * 0.5,
-                mu_rigid=(arr(data["mu_rigid"]) + arr(data["mu_rigid"]).T) * 0.5,
-                S_rigid=arr(data["S_rigid"]), rigid_reference_center=arr(data["rigid_reference_center"]),
-                connectivity=_normalize_connectivity(data.get("e_conn", np.empty((0, 2))), n),
-                metadata={"source_schema": "snupy.mor_fmbd_input", "source_path": str(path), "snupy_topology": data.get("snupy_topology")},
-                modal_mean_force=arr(data.get("r_pre_r", np.zeros(phi.shape[1]))),
-                respod_psi=arr(data["respod_psi"]) if residual else None,
-                respod_ou_rho=arr(data["respod_ou_rho"]) if residual else None,
-                respod_ou_sigma=arr(data["respod_ou_sigma"]) if residual else None,
-                closure_dt_ps=float(data["closure_ou_dt_ps"]) if residual else None,
-            )
+        n_node = init_node.shape[0]
+        phi = torch.as_tensor(data["phi"], device=dev, dtype=dtype)
+        if phi.shape[0] != 6 * n_node:
+            raise ValueError("FMBD_data phi is incompatible with init_node")
+        phi_node = phi.reshape(n_node, 6, -1)
+        K = torch.as_tensor(data["K_r"], device=dev, dtype=dtype)
+        Gamma = torch.as_tensor(data["Gamma_r"], device=dev, dtype=dtype)
+        K = 0.5 * (K + K.T)
+        Gamma = 0.5 * (Gamma + Gamma.T)
+        mu = torch.as_tensor(data.get("mu_r", np.linalg.pinv(np.asarray(data["Gamma_r"]))), device=dev, dtype=dtype)
+        mu = 0.5 * (mu + mu.T)
+        S = torch.as_tensor(data["S_r"], device=dev, dtype=dtype)
+        q0 = torch.as_tensor(init_node[:, 3:6], device=dev, dtype=dtype)
+        optional = {
+            "modal_mean_force": torch.as_tensor(data.get("r_pre_r", np.zeros(phi.shape[1])), device=dev, dtype=dtype),
+            "respod_psi": None,
+            "respod_ou_rho": None,
+            "respod_ou_sigma": None,
+            "closure_dt_ps": None,
+        }
+        if data.get("closure_enabled", False):
+            optional.update({
+                "respod_psi": torch.as_tensor(data["respod_psi"], device=dev, dtype=dtype),
+                "respod_ou_rho": torch.as_tensor(data["respod_ou_rho"], device=dev, dtype=dtype),
+                "respod_ou_sigma": torch.as_tensor(data["respod_ou_sigma"], device=dev, dtype=dtype),
+                "closure_dt_ps": float(data["closure_ou_dt_ps"]),
+            })
+        model = cls(
+            name=name or str(data.get("name", Path(path).stem)),
+            X=torch.as_tensor(init_node[:, :3], device=dev, dtype=dtype),
+            Q0=exp_so3_batch(q0),
+            phi=phi, phi_pos=phi_node[:, :3, :], phi_rot=phi_node[:, 3:, :],
+            K=K, Gamma=Gamma, mu=mu, S=S,
+            Bq=torch.as_tensor(data.get("Bq", mu @ S), device=dev, dtype=dtype),
+            Z_rigid=0.5 * (torch.as_tensor(data["Z_rigid"], device=dev, dtype=dtype) + torch.as_tensor(data["Z_rigid"], device=dev, dtype=dtype).T),
+            mu_rigid=0.5 * (torch.as_tensor(data["mu_rigid"], device=dev, dtype=dtype) + torch.as_tensor(data["mu_rigid"], device=dev, dtype=dtype).T),
+            S_rigid=torch.as_tensor(data["S_rigid"], device=dev, dtype=dtype),
+            rigid_reference_center=torch.as_tensor(data["rigid_reference_center"], device=dev, dtype=dtype),
+            connectivity=_normalize_connectivity(data.get("e_conn", np.empty((0, 2))), n_node),
+            metadata={
+                "source_schema": "snupy.mor_fmbd_input",
+                "source_path": str(path),
+                # Optional node-level topology exported by SNUPY.  Keeping it
+                # as immutable model metadata lets observers reproduce the
+                # original NN/ET/DO PDB convention without touching dynamics.
+                "snupy_topology": data.get("snupy_topology"),
+            },
+            **optional,
+        )
         model._validate()
         return model
 
     @classmethod
-    def from_legacy_mor_data(cls, path: str | Path, *, name: str | None = None, backend: str = "cpu", device: int = 0, dtype=np.float64, drop_rigid_modes: bool = True) -> "BodyModel":
-        with Path(path).open("rb") as stream:
-            data = pickle.load(stream)
-        node = np.asarray(data["init_node"], dtype=np.float64)
-        if node.ndim != 2 or node.shape[1] < 6:
+    def from_legacy_mor_data(cls, path: str | Path, *, name: str | None = None, device: str | torch.device = "cpu", dtype: torch.dtype = torch.float64, drop_rigid_modes: bool = True) -> "BodyModel":
+        """Convert a legacy SNUPY MOR dictionary into this runtime model.
+
+        This compatibility adapter is intentionally isolated from the FMBD
+        simulation loop and should eventually be replaced by offline export.
+        """
+        with Path(path).open("rb") as fh:
+            data = pickle.load(fh)
+        dev = torch.device(device)
+        init_node = np.asarray(data["init_node"], dtype=np.float64)
+        if init_node.ndim != 2 or init_node.shape[1] < 6:
             raise ValueError("legacy init_node must have at least six columns")
-        n = len(node)
-        xp_backend = resolve_backend(backend, device)
-        with xp_backend.context():
-            xp = xp_backend.xp
-            arr = lambda v: xp.asarray(v, dtype=dtype)
-            phi, K, Gamma, S = arr(data["phi"]), arr(data["K_r"]), arr(data["Gamma_r"]), arr(data["S_r"])
-            K, Gamma = (K + K.T) * 0.5, (Gamma + Gamma.T) * 0.5
-            mu = arr(data["mu_r"]) if data.get("mu_r") is not None else None
-            if drop_rigid_modes and K.shape[0] > 6:
-                eig = xp.linalg.eigvalsh(K)
-                if float(to_numpy(xp.max(xp.abs(eig[:6])))) < max(1.0e-12 * float(to_numpy(xp.max(xp.abs(eig)))), 1.0e-6 * abs(float(to_numpy(eig[6])))):
-                    phi, K, Gamma, S = phi[:, 6:], K[6:, 6:], Gamma[6:, 6:], S[6:, 6:]
-                    if mu is not None:
-                        mu = mu[6:, 6:]
-            if mu is None:
-                mu = xp.linalg.pinv(Gamma)
-            mu = (mu + mu.T) * 0.5
-            phi_node = phi.reshape(n, 6, -1)
-            required = ("Z_rigid", "mu_rigid", "S_rigid", "rigid_reference_center")
-            missing = [key for key in required if key not in data]
-            if missing:
-                raise KeyError(f"legacy MOR data is missing rigid hydrodynamics: {missing}")
-            arrz, arrmu = arr(data["Z_rigid"]), arr(data["mu_rigid"])
-            model = cls(
-                name=name or Path(path).stem, X=arr(node[:, :3]), Q0=exp_so3_batch(arr(node[:, 3:6])), phi=phi,
-                phi_pos=phi_node[:, :3], phi_rot=phi_node[:, 3:], K=K, Gamma=Gamma, mu=mu, S=S, Bq=mu @ S,
-                Z_rigid=(arrz + arrz.T) * 0.5, mu_rigid=(arrmu + arrmu.T) * 0.5,
-                S_rigid=arr(data["S_rigid"]), rigid_reference_center=arr(data["rigid_reference_center"]),
-                connectivity=_normalize_connectivity(data.get("e_conn", np.empty((0, 2))), n),
-                metadata={"source_schema": "snupy.legacy_mor", "source_path": str(path)},
-            )
+        n_node = init_node.shape[0]
+        phi = torch.as_tensor(data["phi"], device=dev, dtype=dtype)
+        K = 0.5 * (torch.as_tensor(data["K_r"], device=dev, dtype=dtype) + torch.as_tensor(data["K_r"], device=dev, dtype=dtype).T)
+        Gamma = 0.5 * (torch.as_tensor(data["Gamma_r"], device=dev, dtype=dtype) + torch.as_tensor(data["Gamma_r"], device=dev, dtype=dtype).T)
+        S = torch.as_tensor(data["S_r"], device=dev, dtype=dtype)
+        mu_value = data.get("mu_r")
+        mu = None if mu_value is None else torch.as_tensor(mu_value, device=dev, dtype=dtype)
+        if drop_rigid_modes and K.shape[0] > 6:
+            evals = torch.linalg.eigvalsh(K)
+            if torch.max(torch.abs(evals[:6])) < max(1.0e-12 * torch.max(torch.abs(evals)).item(), 1.0e-6 * abs(evals[6].item())):
+                phi, K, Gamma, S = phi[:, 6:], K[6:, 6:], Gamma[6:, 6:], S[6:, 6:]
+                if mu is not None:
+                    mu = mu[6:, 6:]
+        if mu is None:
+            mu = torch.linalg.pinv(Gamma)
+        mu = 0.5 * (mu + mu.T)
+        phi_node = phi.reshape(n_node, 6, -1)
+        required_rigid = ("Z_rigid", "mu_rigid", "S_rigid", "rigid_reference_center")
+        missing = [key for key in required_rigid if key not in data]
+        if missing:
+            raise KeyError(f"legacy MOR data is missing rigid hydrodynamics: {missing}")
+        model = cls(
+            name=name or Path(path).stem,
+            X=torch.as_tensor(init_node[:, :3], device=dev, dtype=dtype),
+            Q0=exp_so3_batch(torch.as_tensor(init_node[:, 3:6], device=dev, dtype=dtype)),
+            phi=phi,
+            phi_pos=phi_node[:, :3, :],
+            phi_rot=phi_node[:, 3:6, :],
+            K=K,
+            Gamma=Gamma,
+            mu=mu,
+            S=S,
+            Bq=mu @ S,
+            Z_rigid=0.5 * (torch.as_tensor(data["Z_rigid"], device=dev, dtype=dtype) + torch.as_tensor(data["Z_rigid"], device=dev, dtype=dtype).T),
+            mu_rigid=0.5 * (torch.as_tensor(data["mu_rigid"], device=dev, dtype=dtype) + torch.as_tensor(data["mu_rigid"], device=dev, dtype=dtype).T),
+            S_rigid=torch.as_tensor(data["S_rigid"], device=dev, dtype=dtype),
+            rigid_reference_center=torch.as_tensor(data["rigid_reference_center"], device=dev, dtype=dtype),
+            connectivity=_normalize_connectivity(data.get("e_conn", np.empty((0, 2))), n_node),
+            metadata={"source_schema": "snupy.legacy_mor", "source_path": str(path)},
+        )
         model._validate()
         return model
 
     def _validate(self) -> None:
         n, m = self.n_node, self.n_mode
-        expected = {"X": (n, 3), "Q0": (n, 3, 3), "phi": (6*n, m), "phi_pos": (n, 3, m), "phi_rot": (n, 3, m), "K": (m, m), "Gamma": (m, m), "mu": (m, m), "Z_rigid": (6, 6), "mu_rigid": (6, 6), "S_rigid": (6, 6), "rigid_reference_center": (3,)}
-        for name, shape in expected.items():
-            if getattr(self, name).shape != shape:
-                raise ValueError(f"{name} must have shape {shape}, got {getattr(self, name).shape}")
+        expected = {"X": (n, 3), "Q0": (n, 3, 3), "phi": (6 * n, m), "phi_pos": (n, 3, m), "phi_rot": (n, 3, m), "K": (m, m), "Gamma": (m, m), "mu": (m, m), "Z_rigid": (6, 6), "mu_rigid": (6, 6), "S_rigid": (6, 6), "rigid_reference_center": (3,)}
+        for field_name, shape in expected.items():
+            if tuple(getattr(self, field_name).shape) != shape:
+                raise ValueError(f"{field_name} must have shape {shape}, got {tuple(getattr(self, field_name).shape)}")
         if self.S.ndim != 2 or self.S.shape[0] != m or self.Bq.shape != (m, self.S.shape[1]):
             raise ValueError("S and Bq must have shapes (m, k) and (m, k)")
-        if self.modal_mean_force is not None and self.modal_mean_force.shape != (m,):
+        if self.modal_mean_force is not None and tuple(self.modal_mean_force.shape) != (m,):
             raise ValueError("modal_mean_force must have shape (n_mode,)")
         residual = (self.respod_psi, self.respod_ou_rho, self.respod_ou_sigma)
         if any(value is not None for value in residual):
             if any(value is None for value in residual) or self.closure_dt_ps is None:
                 raise ValueError("resPOD closure requires psi, rho, sigma, and closure_dt_ps")
             p = self.n_respod_mode
-            if self.respod_psi.shape != (6*n, p) or self.respod_ou_rho.shape != (p,) or self.respod_ou_sigma.shape != (p,) or self.closure_dt_ps <= 0:
-                raise ValueError("resPOD closure dimensions or time step are invalid")
+            if tuple(self.respod_psi.shape) != (6 * n, p) or tuple(self.respod_ou_rho.shape) != (p,) or tuple(self.respod_ou_sigma.shape) != (p,):
+                raise ValueError("resPOD closure tensor shapes are incompatible")
+            if self.closure_dt_ps <= 0:
+                raise ValueError("closure_dt_ps must be positive")
         _normalize_connectivity(self.connectivity, n)
 
 
 @dataclass
 class BodyState:
-    q: Any
-    R: Any
-    c: Any
-    a: Any | None = None
+    q: torch.Tensor
+    R: torch.Tensor
+    c: torch.Tensor
+    a: torch.Tensor | None = None
 
     @classmethod
-    def at_reference(cls, model: BodyModel, *, R=None, c=None) -> "BodyState":
-        xp = model.xp
-        return cls(q=xp.zeros(model.n_mode, dtype=model.dtype), R=xp.eye(3, dtype=model.dtype) if R is None else xp.asarray(R, dtype=model.dtype), c=xp.zeros(3, dtype=model.dtype) if c is None else xp.asarray(c, dtype=model.dtype), a=None if model.n_respod_mode == 0 else xp.zeros(model.n_respod_mode, dtype=model.dtype))
+    def at_reference(cls, model: BodyModel, *, R: torch.Tensor | None = None, c: torch.Tensor | None = None) -> "BodyState":
+        return cls(
+            q=model.X.new_zeros(model.n_mode),
+            R=torch.eye(3, device=model.X.device, dtype=model.X.dtype) if R is None else R,
+            c=model.X.new_zeros(3) if c is None else c,
+            a=None if model.n_respod_mode == 0 else model.X.new_zeros(model.n_respod_mode),
+        )
 
 
 @dataclass
@@ -255,6 +307,3 @@ class Body:
     reconstruction: Any | None = None
     dynamic: bool = True
     dynamics: DynamicsOptions = field(default_factory=DynamicsOptions)
-
-
-__all__ = ["Body", "BodyModel", "BodyState", "DynamicsOptions"]

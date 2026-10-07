@@ -1,28 +1,25 @@
-"""MOR geometry reconstruction shared by all interactions in a step."""
+"""MOR geometry reconstruction shared by all interactions."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-import torch
-
-from FMBD.core.body import Body
-from FMBD.math.so3 import exp_so3_batch
+from FMBD.legacy_numpy_cupy.core.body import Body
+from FMBD.legacy_numpy_cupy.math.so3 import exp_so3_batch
 
 
 @dataclass
 class ReconstructedBody:
-    U: torch.Tensor
-    y: torch.Tensor
-    xrel: torch.Tensor
-    x: torch.Tensor
-    Qlocal: torch.Tensor
-    Qglobal: torch.Tensor
+    U: object
+    y: object
+    xrel: object
+    x: object
+    Qlocal: object
+    Qglobal: object
 
 
 def reconstruct(body: Body) -> ReconstructedBody:
-    """Reconstruct one body once from its reduced state and cache the result."""
-    model, state = body.model, body.state
+    model, state, xp = body.model, body.state, body.model.xp
     if state.q.shape != (model.n_mode,) or state.R.shape != (3, 3) or state.c.shape != (3,):
         raise ValueError("BodyState shapes must be (n_mode,), (3,3), and (3,)")
     U = (model.phi @ state.q).reshape(model.n_node, 6)
@@ -35,8 +32,11 @@ def reconstruct(body: Body) -> ReconstructedBody:
     y = model.X + U[:, :3]
     xrel = y @ state.R.T
     x = xrel + state.c
-    Qlocal = torch.bmm(exp_so3_batch(U[:, 3:6]), model.Q0)
-    Qglobal = torch.einsum("ij,njk->nik", state.R, Qlocal)
-    result = ReconstructedBody(U=U, y=y, xrel=xrel, x=x, Qlocal=Qlocal, Qglobal=Qglobal)
+    Qlocal = exp_so3_batch(U[:, 3:]) @ model.Q0
+    Qglobal = state.R[None] @ Qlocal
+    result = ReconstructedBody(U, y, xrel, x, Qlocal, Qglobal)
     body.reconstruction = result
     return result
+
+
+__all__ = ["ReconstructedBody", "reconstruct"]

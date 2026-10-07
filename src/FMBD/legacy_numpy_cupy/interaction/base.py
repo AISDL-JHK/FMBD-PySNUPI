@@ -5,9 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-import torch
-
-from FMBD.core.forces import GeneralizedForce, NodalWrench
+from FMBD.legacy_numpy_cupy.core.forces import GeneralizedForce, NodalWrench
 
 
 @dataclass
@@ -16,7 +14,7 @@ class InteractionResult:
 
     nodal_wrenches: dict[str, NodalWrench] = field(default_factory=dict)
     generalized_forces: dict[str, GeneralizedForce] = field(default_factory=dict)
-    energy: torch.Tensor | None = None
+    energy: Any | None = None
     diagnostics: dict[str, Any] = field(default_factory=dict)
 
 

@@ -4,19 +4,22 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "FMBD-SNUPI"
-version = "0.1.0"
+version = "0.2.0"
 description = "SNUPI-integrated flexible multibody Brownian dynamics runtime"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.24", "scipy>=1.10"]
+dependencies = ["numpy>=1.24", "torch>=2.0"]
 
 [project.optional-dependencies]
-test = ["pytest>=7"]
+test = ["pytest>=7", "scipy>=1.10"]
 trajectory = ["MDAnalysis>=2.0"]
-cuda = ["cupy-cuda13x[ctk]>=14.2,<15"]
-cuda12 = ["cupy-cuda12x[ctk]>=14.2,<15"]
-cuda13 = ["cupy-cuda13x[ctk]>=14.2,<15"]
-legacy-torch = ["torch>=2.0"]
+legacy-numpy-cupy = ["scipy>=1.10"]
+legacy-cuda12 = ["scipy>=1.10", "cupy-cuda12x[ctk]>=14.2,<15"]
+legacy-cuda13 = ["scipy>=1.10", "cupy-cuda13x[ctk]>=14.2,<15"]
+# Compatibility aliases retained for environments created with FMBD-SNUPI 0.1.
+cuda = ["scipy>=1.10", "cupy-cuda13x[ctk]>=14.2,<15"]
+cuda12 = ["scipy>=1.10", "cupy-cuda12x[ctk]>=14.2,<15"]
+cuda13 = ["scipy>=1.10", "cupy-cuda13x[ctk]>=14.2,<15"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -9,8 +9,8 @@ import합니다.
 
 ## 1. 설치
 
-프로젝트 root에서 실행합니다. CPU backend는 NumPy/SciPy를 사용하며,
-CUDA backend를 사용할 때만 설치 환경에 맞는 CuPy가 필요합니다.
+프로젝트 root에서 실행합니다. 기본 runtime은 CPU와 CUDA 모두 Torch를
+사용합니다.
 
 ```bash
 python -m pip install -e ".[trajectory]"
@@ -19,36 +19,29 @@ python -m pip install -e ".[trajectory]"
 `trajectory` extra는 PDB/DCD 출력을 위한 MDAnalysis를 설치합니다. 출력이
 필요 없다면 `python -m pip install -e .`로 충분합니다.
 
-CUDA backend는 서버의 CUDA runtime에 맞는 extra를 설치합니다.
+CUDA에서는 서버 드라이버와 CUDA runtime에 맞는 Torch를 먼저 설치한 뒤
+FMBD-SNUPI를 설치합니다. 실행 device는 모델을 읽을 때 지정합니다.
 
-```bash
-# CUDA 12
-python -m pip install -e ".[cuda12,trajectory]"
-
-# CUDA 13
-python -m pip install -e ".[cuda13,trajectory]"
+```python
+model = BodyModel.from_fmbd_data("FMBD_data.pkl", device="cuda:0")
 ```
 
-기존 `cuda` extra는 PySNUPI와 동일하게 CUDA 13 dependency set의
-별칭입니다.
+중간에 개발했던 NumPy/CuPy backend는 `FMBD.legacy_numpy_cupy` 아래에
+보존되어 있습니다. 재현 목적으로 사용할 때만 `legacy-numpy-cupy`,
+`legacy-cuda12`, `legacy-cuda13` extra를 설치합니다.
 
-## 2. MOR artifact 준비
+## 2. PySNUPI FMBD artifact 준비
 
-현재 SNUPY MOR pickle을 처음 한 번 변환합니다.
+PySNUPI의 FMBD input 예제가 생성한 `FMBD_data.pkl`을 직접 읽습니다.
 
 ```python
 from FMBD import BodyModel
 
-model = BodyModel.from_legacy_mor_data(
-    "MOR_RESULTS/example/MOR_data.pkl",
-    name="rotor",
-    backend="cpu",
-)
-model.save("rotor.bodyrom")
+model = BodyModel.from_fmbd_data("FMBD_data.pkl", device="cpu")
 ```
 
-이후 simulation에는 `MOR_data.pkl` 대신 안정적인 versioned artifact인
-`rotor.bodyrom`을 사용합니다.
+반복해서 배포할 때는 `model.save("rotor.bodyrom")`으로 FMBD 자체
+versioned artifact를 만들고 이후 `BodyModel.load(...)`로 읽을 수도 있습니다.
 
 ## 3. 최소 application 구조
 
@@ -56,10 +49,11 @@ model.save("rotor.bodyrom")
 있습니다. 기본 순서는 아래와 같습니다.
 
 ```python
-backend = "cpu"  # CuPy를 사용하는 경우 "cuda"
-device = 0
-model_a = BodyModel.load("body_a.bodyrom", backend=backend, device=device)
-model_b = BodyModel.load("body_b.bodyrom", backend=backend, device=device)
+import torch
+
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+model_a = BodyModel.from_fmbd_data("body_a/FMBD_data.pkl", device=device)
+model_b = BodyModel.from_fmbd_data("body_b/FMBD_data.pkl", device=device)
 
 system = FMBDSystem()
 system.add_body("a", Body(model_a, BodyState.at_reference(model_a)))
@@ -74,6 +68,12 @@ simulation.run()
 `BodyModel`은 불변 데이터이고, `BodyState(q, R, c)`는 매 step 변하는
 modal deformation, rotation, translation입니다. 동일 `BodyModel`로 여러
 `Body`를 만들 수 있습니다.
+
+PySNUPI가 생성한 입력은 변환 없이 바로 읽습니다.
+
+```python
+model = BodyModel.from_fmbd_data("FMBD_data.pkl", device=device)
+```
 
 ## 4. Interaction 추가
 
@@ -122,17 +122,33 @@ PDB는 시작 시 한 번 생성하며 각 body의 internal connectivity와 선�
 그리고 마지막 프레임을 기록합니다. 내부 단위는 nm이고, PDB/DCD를 쓸 때만
 Å로 변환합니다.
 
-## 6. 예제 실행
+## 6. 적분기 선택
 
-`examples/baseline_two_body.py`의 두 `.bodyrom` 경로와 node pair를 실제
+기본값은 중간 형상에서 힘을 다시 계산하는 midpoint Brownian입니다.
+
+```python
+integrator = OverdampedFMBDIntegrator(
+    dt=5.0,
+    options=IntegratorOptions(scheme="midpoint_brownian"),
+)
+```
+
+기존 Euler Brownian 결과를 재현할 때는
+`IntegratorOptions(scheme="euler_brownian")`을 사용합니다. midpoint는
+`Simulation`을 통해 실행하면 중간 형상 재구성과 force 재평가가 자동으로
+수행됩니다.
+
+## 7. 예제 실행
+
+`examples/baseline_two_body.py`의 두 `FMBD_data.pkl` 경로와 node pair를 실제
 입력으로 바꾼 뒤 project root에서 실행합니다.
 
 ```bash
 python examples/baseline_two_body.py
 ```
 
-CPU는 NumPy/SciPy로 실행됩니다. 예제의 `backend = "cuda"`로 바꾸면 같은
-코드가 CuPy CUDA backend를 사용합니다. 실행 중 `output/simulation.log`,
+예제는 사용 가능한 CUDA device를 우선 선택하고, 없으면 CPU로 실행합니다.
+실행 중 `output/simulation.log`,
 `output/system.pdb`, `output/trajectory.dcd`가 순차적으로 기록됩니다.
 
 ## 주의 사항

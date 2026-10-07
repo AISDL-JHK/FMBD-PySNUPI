@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from FMBD.core.elasticity import linear_reduced_force_and_energy
-from FMBD.core.forces import GeneralizedForce, NodalWrench
-from FMBD.core.projection import project_nodal_wrench
+from FMBD.legacy_numpy_cupy.core.elasticity import linear_reduced_force_and_energy
+from FMBD.legacy_numpy_cupy.core.forces import GeneralizedForce, NodalWrench
+from FMBD.legacy_numpy_cupy.core.projection import project_nodal_wrench
 
 
 @dataclass
@@ -35,7 +35,7 @@ class Simulation:
         self.observers = list(self.observers)
         if self.output_dir is None:
             return
-        from FMBD.observer.log import SimulationLogWriter
+        from FMBD.legacy_numpy_cupy.observer.log import SimulationLogWriter
         if not any(isinstance(observer, SimulationLogWriter) for observer in self.observers):
             self.observers.append(SimulationLogWriter(Path(self.output_dir) / "simulation.log"))
 
@@ -49,12 +49,12 @@ class Simulation:
         self._initialized = True
 
     def evaluate_forces(self, context, diagnostics: bool = False) -> tuple[dict[str, GeneralizedForce], dict[str, Any], dict[str, dict[str, Any]]]:
-        nodal = {name: NodalWrench.zeros(body.model.n_node, device=body.model.X.device, dtype=body.model.X.dtype) for name, body in self.system.bodies.items()}
-        forces = {name: GeneralizedForce.zeros(body.model.n_mode, device=body.model.X.device, dtype=body.model.X.dtype) for name, body in self.system.bodies.items()}
+        nodal = {name: NodalWrench.zeros(body.model.n_node, xp=body.model.xp, dtype=body.model.dtype) for name, body in self.system.bodies.items()}
+        forces = {name: GeneralizedForce.zeros(body.model.n_mode, xp=body.model.xp, dtype=body.model.dtype) for name, body in self.system.bodies.items()}
         energies: dict[str, Any] = {}
         for name, body in self.system.bodies.items():
             restoring_force, strain_energy = linear_reduced_force_and_energy(body, diagnostics=diagnostics)
-            forces[name].modal.add_(restoring_force)
+            forces[name].modal += restoring_force
             if strain_energy is not None:
                 energies[f"body.{name}.strain"] = strain_energy
         interaction_diagnostics: dict[str, dict[str, Any]] = {}
@@ -81,9 +81,7 @@ class Simulation:
         context = self.protocol.context(step)
         forces, energies, interaction_diagnostics = self.evaluate_forces(context, diagnostics)
         integrator_diagnostics = self.integrator.step(
-            self.system,
-            forces,
-            context,
+            self.system, forces, context,
             force_evaluator=lambda midpoint_context: self.evaluate_forces(midpoint_context)[0],
         )
         self.system.reconstruct_all()

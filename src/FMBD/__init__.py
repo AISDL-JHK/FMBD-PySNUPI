@@ -1,37 +1,60 @@
-"""Flexible multibody Brownian dynamics runtime."""
+"""Torch-based flexible multibody Brownian dynamics runtime.
 
-from .core.body import Body, BodyModel, BodyState, DynamicsOptions
-from .core.forces import GeneralizedForce, NodalWrench
-from .core.reconstruction import ReconstructedBody, reconstruct
-from .core.projection import project_nodal_wrench
-from .core.system import FMBDSystem
-from .dynamics.overdamped import IntegratorOptions, OverdampedFMBDIntegrator
-from .protocol.base import SimulationContext
+The primary :mod:`FMBD` API uses Torch tensors on CPU or CUDA. The former
+NumPy/CuPy implementation remains available as :mod:`FMBD.legacy_numpy_cupy`
+for archived workflows and result reproduction.
+"""
+
+from .core import (
+    Body, BodyModel, BodyState, DynamicsOptions, FMBDSystem, GeneralizedForce,
+    NodalWrench, ReconstructedBody, project_nodal_wrench, reconstruct,
+)
+from .dynamics import IntegratorOptions, OverdampedFMBDIntegrator
+from .interaction import (
+    CollectiveAxialTorsionInteraction,
+    DebyeHuckelInteraction,
+    EulerBernoulliBeamInteraction,
+    FunctionalInteraction,
+    Interaction,
+    InteractionResult,
+    MorsePairInteraction,
+    mgcl2_ionic_strength_mM,
+)
+from .observer import (
+    DCDTrajectoryWriter, InterBodyBond, Observer, PDBTopologyWriter,
+    SimulationLogWriter,
+)
+from .protocol import PiecewiseProtocol, SimulationContext
 from .simulation import Simulation, StepResult
-from .observer.log import SimulationLogWriter
-from .observer.trajectory import DCDTrajectoryWriter, InterBodyBond, PDBTopologyWriter
-from .interaction.beam import CollectiveAxialTorsionInteraction, EulerBernoulliBeamInteraction
 
 __all__ = [
     "Body",
     "BodyModel",
     "BodyState",
-    "DynamicsOptions",
-    "DCDTrajectoryWriter",
     "CollectiveAxialTorsionInteraction",
+    "DCDTrajectoryWriter",
+    "DebyeHuckelInteraction",
+    "DynamicsOptions",
     "EulerBernoulliBeamInteraction",
     "FMBDSystem",
+    "FunctionalInteraction",
+    "GeneralizedForce",
     "IntegratorOptions",
     "InterBodyBond",
-    "GeneralizedForce",
+    "Interaction",
+    "InteractionResult",
+    "MorsePairInteraction",
     "NodalWrench",
+    "Observer",
     "OverdampedFMBDIntegrator",
     "PDBTopologyWriter",
+    "PiecewiseProtocol",
     "ReconstructedBody",
     "Simulation",
-    "SimulationLogWriter",
     "SimulationContext",
+    "SimulationLogWriter",
     "StepResult",
+    "mgcl2_ionic_strength_mM",
     "project_nodal_wrench",
     "reconstruct",
 ]

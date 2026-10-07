@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from FMBD import Body, BodyModel, BodyState, FMBDSystem
-from FMBD.interaction import DebyeHuckelInteraction
-from FMBD.protocol import SimulationContext
+from FMBD.legacy_numpy_cupy import Body, BodyModel, BodyState, FMBDSystem
+from FMBD.legacy_numpy_cupy.interaction import DebyeHuckelInteraction
+from FMBD.legacy_numpy_cupy.protocol import SimulationContext
 
 
 def _one_node_model(name: str) -> BodyModel:

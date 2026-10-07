@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pickle
 
-from FMBD import (
+from FMBD.legacy_numpy_cupy import (
     Body,
     BodyModel,
     BodyState,

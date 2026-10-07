@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from FMBD import Body, BodyModel, BodyState, FMBDSystem
-from FMBD.interaction import MorsePairInteraction
+from FMBD.legacy_numpy_cupy import Body, BodyModel, BodyState, FMBDSystem
+from FMBD.legacy_numpy_cupy.interaction import MorsePairInteraction
 
 
 def one_node_model(name: str) -> BodyModel:

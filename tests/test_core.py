@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import numpy as np
 
-from FMBD import Body, BodyModel, BodyState, FMBDSystem, NodalWrench, project_nodal_wrench, reconstruct
-from FMBD.math import exp_so3, log_so3
+from FMBD.legacy_numpy_cupy import (
+    Body, BodyModel, BodyState, FMBDSystem, NodalWrench,
+    project_nodal_wrench, reconstruct,
+)
+from FMBD.legacy_numpy_cupy.math import exp_so3, log_so3
 
 
 def make_model() -> BodyModel:

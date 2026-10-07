@@ -4,37 +4,40 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import torch
+
 
 @dataclass
 class NodalWrench:
-    force: object
-    moment: object
+    """Forces and moments at a body's nodes, both shaped ``(N, 3)``."""
+
+    force: torch.Tensor
+    moment: torch.Tensor
 
     @classmethod
-    def zeros(cls, n_node: int, *, xp, dtype):
-        return cls(xp.zeros((n_node, 3), dtype=dtype), xp.zeros((n_node, 3), dtype=dtype))
+    def zeros(cls, n_node: int, *, device: torch.device, dtype: torch.dtype) -> "NodalWrench":
+        return cls(torch.zeros((n_node, 3), device=device, dtype=dtype), torch.zeros((n_node, 3), device=device, dtype=dtype))
 
-    def add_(self, other: "NodalWrench"):
-        self.force += other.force
-        self.moment += other.moment
+    def add_(self, other: "NodalWrench") -> "NodalWrench":
+        self.force.add_(other.force)
+        self.moment.add_(other.moment)
         return self
 
 
 @dataclass
 class GeneralizedForce:
-    translation: object
-    rotation: object
-    modal: object
+    """Body translation, rotation and reduced-modal generalized forces."""
+
+    translation: torch.Tensor
+    rotation: torch.Tensor
+    modal: torch.Tensor
 
     @classmethod
-    def zeros(cls, n_mode: int, *, xp, dtype):
-        return cls(xp.zeros(3, dtype=dtype), xp.zeros(3, dtype=dtype), xp.zeros(n_mode, dtype=dtype))
+    def zeros(cls, n_mode: int, *, device: torch.device, dtype: torch.dtype) -> "GeneralizedForce":
+        return cls(torch.zeros(3, device=device, dtype=dtype), torch.zeros(3, device=device, dtype=dtype), torch.zeros(n_mode, device=device, dtype=dtype))
 
-    def add_(self, other: "GeneralizedForce"):
-        self.translation += other.translation
-        self.rotation += other.rotation
-        self.modal += other.modal
+    def add_(self, other: "GeneralizedForce") -> "GeneralizedForce":
+        self.translation.add_(other.translation)
+        self.rotation.add_(other.rotation)
+        self.modal.add_(other.modal)
         return self
-
-
-__all__ = ["GeneralizedForce", "NodalWrench"]
