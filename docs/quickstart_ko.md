@@ -19,6 +19,19 @@ python -m pip install -e ".[trajectory]"
 `trajectory` extra는 PDB/DCD 출력을 위한 MDAnalysis를 설치합니다. 출력이
 필요 없다면 `python -m pip install -e .`로 충분합니다.
 
+CUDA backend는 서버의 CUDA runtime에 맞는 extra를 설치합니다.
+
+```bash
+# CUDA 12
+python -m pip install -e ".[cuda12,trajectory]"
+
+# CUDA 13
+python -m pip install -e ".[cuda13,trajectory]"
+```
+
+기존 `cuda` extra는 PySNUPI와 동일하게 CUDA 13 dependency set의
+별칭입니다.
+
 ## 2. MOR artifact 준비
 
 현재 SNUPY MOR pickle을 처음 한 번 변환합니다.

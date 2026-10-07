@@ -22,6 +22,11 @@ From the repository root, install with
 `python -m pip install -e ".[trajectory]"` when PDB/DCD trajectory observers
 are required.
 
+For CUDA execution, install the extra matching the server runtime:
+`python -m pip install -e ".[cuda12,trajectory]"` for CUDA 12 or
+`python -m pip install -e ".[cuda13,trajectory]"` for CUDA 13. The existing
+`cuda` extra is an alias for the CUDA 13 dependency set, matching PySNUPI.
+
 For Debye-Hückel interactions, CPU runs build cross-body neighbor lists with
 SciPy `cKDTree`. CUDA runs use a CuPy cell-list kernel and retain candidate
 pairs as a Verlet list on the GPU; only the configured exclusions and active
