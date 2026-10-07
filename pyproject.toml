@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "FMBD"
+version = "0.1.0"
+description = "General-purpose flexible multibody Brownian dynamics runtime"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "scipy>=1.10"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+trajectory = ["MDAnalysis>=2.0"]
+cuda = ["cupy-cuda12x>=13.0"]
+legacy-torch = ["torch>=2.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
