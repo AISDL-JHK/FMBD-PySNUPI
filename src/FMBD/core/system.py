@@ -13,6 +13,7 @@ from FMBD.core.reconstruction import reconstruct
 class FMBDSystem:
     bodies: dict[str, Body] = field(default_factory=dict)
     interactions: list[Any] = field(default_factory=list)
+    batch_bodies: bool = True
 
     def add_body(self, name: str, body: Body) -> None:
         if name in self.bodies:
@@ -23,5 +24,14 @@ class FMBDSystem:
         self.interactions.append(interaction)
 
     def reconstruct_all(self) -> None:
-        for body in self.bodies.values():
-            reconstruct(body)
+        if not self.batch_bodies:
+            for body in self.bodies.values():
+                reconstruct(body)
+            return
+        from FMBD.core.batching import grouped_bodies
+        from FMBD.core.reconstruction import reconstruct_batch
+        for group in grouped_bodies(self):
+            if len(group.bodies)==1:
+                reconstruct(group.bodies[0])
+            else:
+                reconstruct_batch(group)

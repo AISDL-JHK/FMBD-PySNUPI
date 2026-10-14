@@ -54,6 +54,26 @@ are evaluated analytically in batches; potential quadrature runs only for
 requested diagnostics. The midpoint integrator and generalized-force
 projection are unchanged.
 
+### Body batching
+
+Body batching is enabled by default. Rigid pose updates group all dynamic
+bodies by device/dtype, regardless of node or mode counts. ROM reconstruction,
+elastic force, and nodal-wrench projection group bodies by node/NMA/POD counts
+without padding. Repeated BodyModel instances share matrix storage through
+zero-stride batch views; distinct equal-sized models use cached stacked
+matrices. Mixed sizes run in separate groups. Single-body reconstruction and
+force evaluation retain the scalar path.
+
+Brownian draws preserve body insertion order and channel-specific enable
+flags, so scalar and batched updates can be compared using the same seed.
+Fixed bodies continue to contribute interactions and outputs but are not
+integrated. To select the original execution path for comparison, use
+`FMBDSystem(batch_bodies=False)` and
+`IntegratorOptions(batch_bodies=False)`. No physical parameters or time steps
+change. Immutable model matrices are cached; replacements and in-place tensor
+updates invalidate stacked caches. Diagnostics norms are calculated only on
+requested diagnostic steps in the batched integrator.
+
 For CUDA execution, install the Torch build matching the server driver/runtime,
 then install FMBD-SNUPI normally. A model selects a device when it is loaded:
 `BodyModel.from_fmbd_data(path, device="cuda:0")`.

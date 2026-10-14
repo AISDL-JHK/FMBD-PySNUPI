@@ -35,8 +35,11 @@ class IntegratorOptions:
     max_modal_step: float | None = None
     internal_scheme: str = "nma"
     scheme: str = "midpoint_brownian"
+    batch_bodies: bool = True
 
     def __post_init__(self) -> None:
+        if type(self.batch_bodies) is not bool:
+            raise TypeError('batch_bodies must be bool')
         valid_internal = {"nma", "modal_mean_force", "meanforce_respod_ou"}
         if self.internal_scheme not in valid_internal:
             raise ValueError(
@@ -341,6 +344,7 @@ class OverdampedFMBDIntegrator:
         context: Any,
         *,
         force_evaluator: Callable[[Any], Mapping[str, GeneralizedForce]] | None = None,
+        diagnostics: bool = True,
     ) -> dict[str, dict[str, torch.Tensor]]:
         """Advance one time step.
 
@@ -348,6 +352,11 @@ class OverdampedFMBDIntegrator:
         be recomputed from the reconstructed midpoint configuration. The
         :class:`~FMBD.Simulation` orchestration supplies it automatically.
         """
+        if self.options.scheme=='midpoint_brownian' and force_evaluator is None:
+            raise ValueError('midpoint_brownian requires force_evaluator; call through Simulation')
+        if self.options.batch_bodies and getattr(system,'batch_bodies',False) and len(system.bodies)>1:
+            from ._batched import step_batched
+            return step_batched(self,system,forces,context,force_evaluator,diagnostics)
         if self.options.scheme == "euler_brownian":
             return self._step_euler(system, forces)
         if force_evaluator is None:

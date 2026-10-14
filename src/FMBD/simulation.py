@@ -9,6 +9,9 @@ from typing import Any, Callable
 from FMBD.core.elasticity import linear_reduced_force_and_energy
 from FMBD.core.forces import GeneralizedForce, NodalWrench
 from FMBD.core.projection import project_nodal_wrench
+from FMBD.core.projection import project_nodal_wrenches_batch
+from FMBD.core.batching import grouped_bodies
+import torch
 
 
 @dataclass
@@ -49,14 +52,33 @@ class Simulation:
         self._initialized = True
 
     def evaluate_forces(self, context, diagnostics: bool = False) -> tuple[dict[str, GeneralizedForce], dict[str, Any], dict[str, dict[str, Any]]]:
-        nodal = {name: NodalWrench.zeros(body.model.n_node, device=body.model.X.device, dtype=body.model.X.dtype) for name, body in self.system.bodies.items()}
-        forces = {name: GeneralizedForce.zeros(body.model.n_mode, device=body.model.X.device, dtype=body.model.X.dtype) for name, body in self.system.bodies.items()}
         energies: dict[str, Any] = {}
-        for name, body in self.system.bodies.items():
-            restoring_force, strain_energy = linear_reduced_force_and_energy(body, diagnostics=diagnostics)
-            forces[name].modal.add_(restoring_force)
-            if strain_energy is not None:
-                energies[f"body.{name}.strain"] = strain_energy
+        batching=getattr(self.system,'batch_bodies',False) and len(self.system.bodies)>1
+        if batching:
+            nodal,forces={},{}
+            groups=grouped_bodies(self.system)
+            for group in groups:
+                model=group.bodies[0].model
+                q=group.state('q')
+                modal=-group.apply('K',q)
+                nf=model.X.new_zeros((len(group.bodies),model.n_node,3))
+                nm=torch.zeros_like(nf)
+                ft=model.X.new_zeros((len(group.bodies),3))
+                fr=torch.zeros_like(ft)
+                strain=-0.5*(q*modal).sum(dim=1) if diagnostics else None
+                for i,name in enumerate(group.names):
+                    nodal[name]=NodalWrench(nf[i],nm[i])
+                    forces[name]=GeneralizedForce(ft[i],fr[i],modal[i])
+                    if diagnostics:
+                        energies[f'body.{name}.strain']=strain[i]
+        else:
+            nodal = {name: NodalWrench.zeros(body.model.n_node, device=body.model.X.device, dtype=body.model.X.dtype) for name, body in self.system.bodies.items()}
+            forces = {name: GeneralizedForce.zeros(body.model.n_mode, device=body.model.X.device, dtype=body.model.X.dtype) for name, body in self.system.bodies.items()}
+            for name, body in self.system.bodies.items():
+                restoring_force, strain_energy = linear_reduced_force_and_energy(body, diagnostics=diagnostics)
+                forces[name].modal.add_(restoring_force)
+                if strain_energy is not None:
+                    energies[f"body.{name}.strain"] = strain_energy
         interaction_diagnostics: dict[str, dict[str, Any]] = {}
         for interaction in self.system.interactions:
             result = interaction.compute(self.system, context, diagnostics=diagnostics)
@@ -71,8 +93,14 @@ class Simulation:
                     energies[interaction.name] = result.energy
             if diagnostics:
                 interaction_diagnostics[interaction.name] = result.diagnostics
-        for name, body in self.system.bodies.items():
-            forces[name].add_(project_nodal_wrench(body, nodal[name]))
+        if batching:
+            for group in groups:
+                projected=project_nodal_wrenches_batch(group,nodal)
+                for name,force in projected.items():
+                    forces[name].add_(force)
+        else:
+            for name, body in self.system.bodies.items():
+                forces[name].add_(project_nodal_wrench(body, nodal[name]))
         return forces, energies, interaction_diagnostics
 
     def step(self, step: int, diagnostics: bool = False) -> StepResult:
@@ -85,6 +113,7 @@ class Simulation:
             forces,
             context,
             force_evaluator=lambda midpoint_context: self.evaluate_forces(midpoint_context)[0],
+            diagnostics=diagnostics,
         )
         self.system.reconstruct_all()
         self.last_completed_step = step + 1
