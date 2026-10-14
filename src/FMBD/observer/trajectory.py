@@ -162,68 +162,68 @@ class PDBTopologyWriter:
 
 @dataclass
 class DCDTrajectoryWriter:
-    """Write all bodies' reconstructed coordinates to a DCD trajectory.
+    """Stream frames to a journal and publish complete DCDs for live viewing.
 
-    MDAnalysis is imported lazily, so users who do not request DCD output do
-    not need it installed. Coordinates are converted from nm to Å at output.
+    ``every`` controls integration sampling. ``publish_every`` controls how
+    often the complete journal is copied to the public ``path``, counted in
+    saved frames. Initial and final snapshots are always attempted. Readers
+    can lock the public file without blocking integration: publication retries
+    later and the private journal retains all frames. Set ``publish_every``
+    higher for large trajectories to reduce snapshot copying costs.
+    Coordinates are converted from nm to Angstrom; no MDAnalysis is required.
     """
 
     path: str | Path
     every: int = 1
+    publish_every: int = 10
     _writer: Any = field(default=None, init=False, repr=False)
-    _universe: Any = field(default=None, init=False, repr=False)
     _last_written_step: int | None = field(default=None, init=False, repr=False)
+    _publication_locked: bool = field(default=False, init=False, repr=False)
 
     def on_start(self, simulation: Any, context: Any) -> None:
         if self.every <= 0:
             raise ValueError("DCD output interval must be positive")
-        try:
-            import MDAnalysis as mda
-            from MDAnalysis.coordinates.DCD import DCDWriter
-        except ModuleNotFoundError as exc:
-            raise ModuleNotFoundError("DCDTrajectoryWriter requires the optional dependency MDAnalysis") from exc
+        if self.publish_every <= 0:
+            raise ValueError('DCD publication interval must be positive')
+        from ._live_dcd import LiveDCDFile
         n_atoms = sum(body.model.n_node for body in simulation.system.bodies.values())
-        self._universe = mda.Universe.empty(n_atoms, n_residues=n_atoms, atom_resindex=np.arange(n_atoms), trajectory=True)
-        self._universe.add_TopologyAttr("names", ["N"] * n_atoms)
-        self._universe.add_TopologyAttr("types", ["N"] * n_atoms)
-        self._universe.add_TopologyAttr("resnames", ["NOD"] * n_atoms)
-        self._universe.add_TopologyAttr("resids", np.arange(1, n_atoms + 1))
-        self._universe.add_TopologyAttr("segids", ["SYS"])
-        path = Path(self.path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self._writer = DCDWriter(str(path), n_atoms=n_atoms)
+        self._writer = LiveDCDFile(self.path,n_atoms,float(context.dt)*self.every)
+        self._publication_locked = False
         self._write(simulation, step=0)
+        self._publish()
 
     def _write(self, simulation: Any, step: int) -> None:
-        if self._writer is None or self._universe is None:
+        if self._writer is None:
             raise RuntimeError("DCD writer has not been initialized")
         xyz = np.concatenate([body.reconstruction.x.detach().cpu().numpy() for body in simulation.system.bodies.values()], axis=0)
-        self._universe.atoms.positions = xyz * 10.0
-        self._universe.dimensions = np.array([0.0, 0.0, 0.0, 90.0, 90.0, 90.0], dtype=np.float32)
-        # FMBD systems are non-periodic unless an application provides box
-        # dimensions. MDAnalysis represents a zero-sized unit cell as None and
-        # warns while writing the corresponding all-zero DCD cell; suppress only
-        # that expected output warning.
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message="No dimensions set for current frame, zeroed unitcell will be written",
-                category=UserWarning,
-                module=r"MDAnalysis\.coordinates\.DCD",
-            )
-            self._writer.write(self._universe.atoms)
+        self._writer.append(xyz * 10.0)
         self._last_written_step = step
+
+    def _publish(self):
+        published=self._writer.publish()
+        if not published and not self._publication_locked:
+            warnings.warn(f'DCD viewer locked {self.path}; retaining its last complete snapshot. '
+                f'All frames continue in {self._writer.journal}. Publication will retry.',RuntimeWarning)
+        self._publication_locked=not published
+        return published
 
     def on_step(self, simulation: Any, result: Any) -> None:
         completed_step = result.context.step + 1
         if completed_step % self.every == 0:
             self._write(simulation, completed_step)
+            if (self._writer.frame_count-1) % self.publish_every == 0:
+                self._publish()
 
     def on_finish(self, simulation: Any) -> None:
         if self._writer is None:
             return
-        if self._last_written_step != getattr(simulation, "last_completed_step", None):
-            self._write(simulation, getattr(simulation, "last_completed_step", 0))
-        self._writer.close()
+        final_step=getattr(simulation, 'last_completed_step', None) or 0
+        if self._last_written_step != final_step:
+            self._write(simulation, final_step)
+        if not self._publish():
+            complete=Path(self.path).with_name(Path(self.path).stem+'_complete.dcd')
+            published=self._writer.publish(complete)
+            recovered=complete if published else self._writer.journal
+            warnings.warn(f'Final DCD snapshot remains locked; complete final trajectory '
+                f'is available at {recovered}.',RuntimeWarning)
         self._writer = None
-        self._universe = None

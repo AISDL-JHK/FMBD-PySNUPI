@@ -20,9 +20,39 @@ Brownian integration, live logging, and PDB/DCD observers. The default
 integrator is stochastic midpoint Brownian; the former Euler Brownian update
 remains selectable through `IntegratorOptions(scheme="euler_brownian")`.
 
-From the repository root, install with
-`python -m pip install -e ".[trajectory]"` when PDB/DCD trajectory observers
-are required.
+From the repository root, install with `python -m pip install -e .`.
+PDB/DCD writing uses NumPy and does not require MDAnalysis. The optional
+`.[trajectory]` extra installs MDAnalysis for reading and inspecting outputs.
+
+### Safe live trajectories
+
+`DCDTrajectoryWriter(path, every=100, publish_every=10)` saves coordinates
+every 100 integration steps and publishes a complete viewer-readable DCD
+every 10 saved frames. Initial and final publication are always attempted.
+The append-only `.<filename>.stream` journal is flushed and closed after each
+frame; `path` is replaced atomically from a temporary snapshot. A Windows
+viewer locking `path` only delays publication, never integration or journal
+recording. Reopen the public DCD to see its latest snapshot. If it is still
+locked at completion, a `<stem>_complete.dcd` final copy is published instead.
+The journal retains all recorded frames for recovery.
+
+Snapshots are copied with bounded memory, but copy cost grows with trajectory
+length. Increase `publish_every` for long runs; it does not change sampling or
+discard any saved frames. Both topology-PDB and DCD coordinates use Angstrom.
+Pass `InterBodyBond` entries to `PDBTopologyWriter` to include linker CONECT
+bonds; an implicit ssDNA linker is a bond, not an explicit nucleotide chain.
+
+### Single-strand connectors
+
+`FMBD.interaction.SingleStrandBeamInteraction` uses the PySNUPI mean ssDNA
+material law, including length-dependent axial rigidity and corotational
+bending/torsion. `SingleStrandDNAParameters.from_nucleotides(16)` means 16
+unpaired nucleotides plus two attachment bases (bridge count 18). It determines
+the axial rest length from the material rather than initial body placement.
+Angular reference frames are captured at initialization. Nodal force/moment
+are evaluated analytically in batches; potential quadrature runs only for
+requested diagnostics. The midpoint integrator and generalized-force
+projection are unchanged.
 
 For CUDA execution, install the Torch build matching the server driver/runtime,
 then install FMBD-SNUPI normally. A model selects a device when it is loaded:

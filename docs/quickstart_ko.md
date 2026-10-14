@@ -16,8 +16,8 @@ import합니다.
 python -m pip install -e ".[trajectory]"
 ```
 
-`trajectory` extra는 PDB/DCD 출력을 위한 MDAnalysis를 설치합니다. 출력이
-필요 없다면 `python -m pip install -e .`로 충분합니다.
+`trajectory` extra는 궤적 읽기·검토를 위한 MDAnalysis를 설치합니다.
+PDB/DCD 출력 자체는 `python -m pip install -e .`만으로 가능합니다.
 
 CUDA에서는 서버 드라이버와 CUDA runtime에 맞는 Torch를 먼저 설치한 뒤
 FMBD-SNUPI를 설치합니다. 실행 device는 모델을 읽을 때 지정합니다.
@@ -121,6 +121,22 @@ PDB는 시작 시 한 번 생성하며 각 body의 internal connectivity와 선�
 `InterBodyBond`를 포함합니다. DCD는 초기 프레임, `every` 간격 프레임,
 그리고 마지막 프레임을 기록합니다. 내부 단위는 nm이고, PDB/DCD를 쓸 때만
 Å로 변환합니다.
+
+실시간 DCD는 `.<파일명>.stream`에 프레임을 기록하고, 완전한 기록의
+snapshot을 `trajectory.dcd`로 원자적으로 교체합니다. 프레임마다 기록
+파일을 flush하고 닫으므로 메모리에 전체 궤적을 누적하지 않습니다.
+PDB/DCD를 쓰는 데 MDAnalysis는 필요하지 않습니다.
+
+`every`는 적분 스텝 기준 저장 간격이며, `publish_every`는 저장 프레임
+기준 Viewer용 DCD 갱신 간격입니다. 기본 `publish_every=10`이고 초기·최종
+상태는 별도로 갱신합니다. `publish_every=1`이면 저장할 때마다 갱신하지만,
+긴 궤적에서는 파일 복사 비용이 커질 수 있습니다. 모든 프레임은 갱신
+간격과 무관하게 기록 파일에 남습니다.
+
+Windows Viewer가 공개 DCD를 잠그면 기존 snapshot을 유지하고 다음 갱신을
+재시도합니다. 적분과 프레임 기록은 계속됩니다. 최신 snapshot은 Viewer에서
+파일을 다시 열어 확인합니다. 종료 시에도 잠겨 있으면 전체 궤적을
+`trajectory_complete.dcd`로 추가 발행합니다.
 
 ## 6. 적분기 선택
 
