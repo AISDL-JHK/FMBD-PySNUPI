@@ -38,7 +38,13 @@ The journal retains all recorded frames for recovery.
 
 Snapshots are copied with bounded memory, but copy cost grows with trajectory
 length. Increase `publish_every` for long runs; it does not change sampling or
-discard any saved frames. Both topology-PDB and DCD coordinates use Angstrom.
+discard any saved frames. Both topology-PDB and DCD coordinates use **nm** by
+default, matching PySNUPI coarse outputs and FMBD's internal length unit.
+General molecular viewers may assume Angstrom; interpret displayed distances
+accordingly. For Angstrom output, set `coordinate_scale=10.0` on **both**
+`PDBTopologyWriter` and `DCDTrajectoryWriter`. Earlier FMBD outputs used Angstrom;
+existing files are not converted by this change. The archived NumPy/CuPy backend
+retains its original output convention.
 Pass `InterBodyBond` entries to `PDBTopologyWriter` to include linker CONECT
 bonds; an implicit ssDNA linker is a bond, not an explicit nucleotide chain.
 

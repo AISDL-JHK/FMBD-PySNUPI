@@ -47,8 +47,8 @@ class LiveDCDFile:
         handle.write(data)
         handle.write(marker)
 
-    def append(self, xyz_angstrom):
-        xyz=np.asarray(xyz_angstrom,dtype='<f4')
+    def append(self, coordinates):
+        xyz=np.asarray(coordinates,dtype='<f4')
         if xyz.shape!=(self.n_atoms,3) or not np.isfinite(xyz).all():
             raise ValueError('DCD coordinates must be finite with shape (n_atoms,3)')
         with self.journal.open('r+b') as handle:

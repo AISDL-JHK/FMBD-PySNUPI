@@ -110,7 +110,7 @@ class PDBTopologyWriter:
 
     path: str | Path
     inter_body_bonds: Sequence[InterBodyBond] = field(default_factory=tuple)
-    coordinate_scale: float = 10.0  # nm -> Å
+    coordinate_scale: float = 1.0  # Internal and default output coordinates: nm.
 
     def on_start(self, simulation: Any, context: Any) -> None:
         path = Path(self.path)
@@ -118,6 +118,7 @@ class PDBTopologyWriter:
         bonds = _combined_bonds(simulation.system, self.inter_body_bonds)
         with path.open("w", encoding="utf-8", newline="\n") as handle:
             handle.write("REMARK   FMBD topology; coordinates are the initial reconstructed state\n")
+            handle.write(f"REMARK   FMBD coordinates: internal nm multiplied by {self.coordinate_scale:g}\n")
             handle.write("REMARK 950 FMBD BODY CHAIN MAP\n")
             for chain_index, (name, body) in enumerate(simulation.system.bodies.items()):
                 topology = _snupy_topology(body)
@@ -170,12 +171,15 @@ class DCDTrajectoryWriter:
     can lock the public file without blocking integration: publication retries
     later and the private journal retains all frames. Set ``publish_every``
     higher for large trajectories to reduce snapshot copying costs.
-    Coordinates are converted from nm to Angstrom; no MDAnalysis is required.
+    Coordinates use nm by default, matching PySNUPI coarse trajectories.
+    Set coordinate_scale=10.0 on both PDB and DCD writers for Angstrom output.
+    No MDAnalysis is required.
     """
 
     path: str | Path
     every: int = 1
     publish_every: int = 10
+    coordinate_scale: float = 1.0
     _writer: Any = field(default=None, init=False, repr=False)
     _last_written_step: int | None = field(default=None, init=False, repr=False)
     _publication_locked: bool = field(default=False, init=False, repr=False)
@@ -196,7 +200,7 @@ class DCDTrajectoryWriter:
         if self._writer is None:
             raise RuntimeError("DCD writer has not been initialized")
         xyz = np.concatenate([body.reconstruction.x.detach().cpu().numpy() for body in simulation.system.bodies.values()], axis=0)
-        self._writer.append(xyz * 10.0)
+        self._writer.append(xyz * self.coordinate_scale)
         self._last_written_step = step
 
     def _publish(self):
