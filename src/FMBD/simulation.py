@@ -43,6 +43,14 @@ class Simulation:
             self.observers.append(SimulationLogWriter(Path(self.output_dir) / "simulation.log"))
 
     def initialize(self) -> None:
+        from FMBD.observer.trajectory import DCDTrajectoryWriter
+        from FMBD.observer.log import SimulationLogWriter
+        trajectory = next((observer for observer in self.observers
+                           if isinstance(observer, DCDTrajectoryWriter)), None)
+        if trajectory is not None:
+            for observer in self.observers:
+                if isinstance(observer, SimulationLogWriter):
+                    observer.every = trajectory.every
         self.system.reconstruct_all()
         context0 = self.protocol.context(self.last_completed_step or 0)
         for interaction in self.system.interactions:
@@ -81,16 +89,17 @@ class Simulation:
                     energies[f"body.{name}.strain"] = strain_energy
         interaction_diagnostics: dict[str, dict[str, Any]] = {}
         from FMBD.interaction.single_strand import SingleStrandBeamInteraction
+        from FMBD.interaction.tether import SingleStrandTetherInteraction
         linker_results = {}
         if getattr(self.system, 'batch_linkers', True):
             linker_groups = {}
             for index, interaction in enumerate(self.system.interactions):
-                if type(interaction) is SingleStrandBeamInteraction:
+                if type(interaction) in (SingleStrandBeamInteraction, SingleStrandTetherInteraction):
                     tensor = self.system.bodies[interaction.body_a].model.X
-                    key = (interaction.parameters, tensor.device, tensor.dtype)
+                    key = (type(interaction), interaction.parameters, tensor.device, tensor.dtype)
                     linker_groups.setdefault(key, []).append((index, interaction))
             for entries in linker_groups.values():
-                results = SingleStrandBeamInteraction.compute_batch(
+                results = type(entries[0][1]).compute_batch(
                     [entry[1] for entry in entries], self.system, context, diagnostics)
                 linker_results.update(zip((entry[0] for entry in entries), results))
         for index, interaction in enumerate(self.system.interactions):
@@ -119,6 +128,10 @@ class Simulation:
     def step(self, step: int, diagnostics: bool = False) -> StepResult:
         if not self._initialized:
             self.initialize()
+        from FMBD.observer.log import SimulationLogWriter
+        diagnostics = diagnostics or any(
+            isinstance(observer, SimulationLogWriter) and (step + 1) % observer.every == 0
+            for observer in self.observers)
         context = self.protocol.context(step)
         forces, energies, interaction_diagnostics = self.evaluate_forces(context, diagnostics)
         integrator_diagnostics = self.integrator.step(

@@ -177,7 +177,7 @@ class DCDTrajectoryWriter:
     """
 
     path: str | Path
-    every: int = 1
+    every: int = 500
     publish_every: int = 10
     coordinate_scale: float = 1.0
     _writer: Any = field(default=None, init=False, repr=False)

@@ -45,6 +45,14 @@ accordingly. For Angstrom output, set `coordinate_scale=10.0` on **both**
 `PDBTopologyWriter` and `DCDTrajectoryWriter`. Earlier FMBD outputs used Angstrom;
 existing files are not converted by this change. The archived NumPy/CuPy backend
 retains its original output convention.
+
+Process log records follow the DCD frame-saving interval (`every`), independently
+of the public DCD snapshot publication interval (`publish_every`). Simulation
+automatically aligns registered log writers and evaluates force/energy
+diagnostics on logged steps, even if `diagnostics_every` is omitted. If multiple
+DCD writers are registered, the first sets the log interval. Without a DCD
+writer, the log writer's configured interval is used.
+The default saving/logging interval is 500 integration steps (2.5 ns at dt=5 ps).
 Pass `InterBodyBond` entries to `PDBTopologyWriter` to include linker CONECT
 bonds; an implicit ssDNA linker is a bond, not an explicit nucleotide chain.
 
