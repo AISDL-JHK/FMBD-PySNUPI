@@ -166,15 +166,35 @@ class SingleStrandBeamInteraction:
         differentials. This preserves the original angular potential while
         avoiding reverse-mode autograd and one graph per linker.
         """
-        a, b = system.bodies[self.body_a], system.bodies[self.body_b]
-        wa = NodalWrench.zeros(a.model.n_node, device=a.model.X.device, dtype=a.model.X.dtype)
-        wb = NodalWrench.zeros(b.model.n_node, device=b.model.X.device, dtype=b.model.X.dtype)
-        p=self.parameters
-        d=b.reconstruction.x[self._node_b]-a.reconstruction.x[self._node_a]
-        lengths=torch.linalg.norm(d,dim=-1)
-        n=d/lengths[:,None]
-        Ha=a.reconstruction.Qglobal[self._node_a]@self._frame_a
-        Hb=b.reconstruction.Qglobal[self._node_b]@self._frame_b
+        return self.compute_batch([self], system, context, diagnostics)[0]
+
+    @staticmethod
+    def compute_batch(interactions, system, context, diagnostics=False):
+        """Evaluate compatible connectors together, retaining individual results.
+
+        Endpoint gathering and scattering use each body's own node indices;
+        body shapes and node counts need not match. Material, device and dtype
+        must match across this batch.
+        """
+        first = interactions[0]
+        p = first.parameters
+        chords, frames_a, frames_b = [], [], []
+        for interaction in interactions:
+            a, b = system.bodies[interaction.body_a], system.bodies[interaction.body_b]
+            if interaction.parameters != p:
+                raise ValueError('Linker batch materials must match')
+            if a.model.X.device != first._basis.device or b.model.X.device != first._basis.device:
+                raise ValueError('Linker batch devices must match')
+            if a.model.X.dtype != first._basis.dtype or b.model.X.dtype != first._basis.dtype:
+                raise ValueError('Linker batch dtypes must match')
+            chords.append(b.reconstruction.x[interaction._node_b]-a.reconstruction.x[interaction._node_a])
+            frames_a.append(a.reconstruction.Qglobal[interaction._node_a]@interaction._frame_a)
+            frames_b.append(b.reconstruction.Qglobal[interaction._node_b]@interaction._frame_b)
+        d = torch.cat(chords)
+        Ha, Hb = torch.cat(frames_a), torch.cat(frames_b)
+        lengths = torch.linalg.norm(d,dim=-1)
+        n = d/lengths[:,None]
+        self = first
         count=d.shape[0]
         # Variations are derivatives with respect to [d, alpha_A, alpha_B].
         dd=d.new_zeros((count,9,3))
@@ -223,15 +243,26 @@ class SingleStrandBeamInteraction:
         EA=p.EA_low+(p.EA_high-p.EA_low)*torch.sigmoid(p.slope*(lengths/p.contour_length-1))
         tension=EA*(lengths-p.reference_length)/p.reference_length
         force=gradient[:,:3]+tension[:,None]*n
-        wa.force.index_add_(0,self._node_a,force)
-        wb.force.index_add_(0,self._node_b,-force)
-        wa.moment.index_add_(0,self._node_a,-gradient[:,3:6])
-        wb.moment.index_add_(0,self._node_b,-gradient[:,6:9])
-        energy=None
+        angular = None
         if diagnostics:
             angular=p.GJ/(2*p.reference_length)*(ra[:,0]-rb[:,0])**2
             angular+=2*p.EI/p.reference_length*(ra[:,1:]**2+rb[:,1:]**2+ra[:,1:]*rb[:,1:]).sum(-1)
-            energy=angular.sum()+torch.stack([self._axial_energy(length) for length in lengths]).sum()
-        return InteractionResult(nodal_wrenches={self.body_a:wa, self.body_b:wb},
-            energy=energy,
-            diagnostics={'lengths_nm':lengths, 'material':asdict(p)} if diagnostics else {})
+        results = []
+        offset = 0
+        for interaction in interactions:
+            a, b = system.bodies[interaction.body_a], system.bodies[interaction.body_b]
+            wa = NodalWrench.zeros(a.model.n_node, device=a.model.X.device, dtype=a.model.X.dtype)
+            wb = NodalWrench.zeros(b.model.n_node, device=b.model.X.device, dtype=b.model.X.dtype)
+            stop = offset + len(interaction._pairs)
+            chunk = slice(offset, stop)
+            wa.force.index_add_(0,interaction._node_a,force[chunk])
+            wb.force.index_add_(0,interaction._node_b,-force[chunk])
+            wa.moment.index_add_(0,interaction._node_a,-gradient[chunk,3:6])
+            wb.moment.index_add_(0,interaction._node_b,-gradient[chunk,6:9])
+            energy = None
+            if diagnostics:
+                energy=angular[chunk].sum()+torch.stack([interaction._axial_energy(length) for length in lengths[chunk]]).sum()
+            results.append(InteractionResult(nodal_wrenches={interaction.body_a:wa, interaction.body_b:wb},
+                energy=energy, diagnostics={'lengths_nm':lengths[chunk], 'material':asdict(p)} if diagnostics else {}))
+            offset = stop
+        return results

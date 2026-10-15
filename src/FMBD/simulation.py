@@ -44,7 +44,7 @@ class Simulation:
 
     def initialize(self) -> None:
         self.system.reconstruct_all()
-        context0 = self.protocol.context(0)
+        context0 = self.protocol.context(self.last_completed_step or 0)
         for interaction in self.system.interactions:
             interaction.initialize(self.system, context0)
         for observer in self.observers:
@@ -80,8 +80,21 @@ class Simulation:
                 if strain_energy is not None:
                     energies[f"body.{name}.strain"] = strain_energy
         interaction_diagnostics: dict[str, dict[str, Any]] = {}
-        for interaction in self.system.interactions:
-            result = interaction.compute(self.system, context, diagnostics=diagnostics)
+        from FMBD.interaction.single_strand import SingleStrandBeamInteraction
+        linker_results = {}
+        if getattr(self.system, 'batch_linkers', True):
+            linker_groups = {}
+            for index, interaction in enumerate(self.system.interactions):
+                if type(interaction) is SingleStrandBeamInteraction:
+                    tensor = self.system.bodies[interaction.body_a].model.X
+                    key = (interaction.parameters, tensor.device, tensor.dtype)
+                    linker_groups.setdefault(key, []).append((index, interaction))
+            for entries in linker_groups.values():
+                results = SingleStrandBeamInteraction.compute_batch(
+                    [entry[1] for entry in entries], self.system, context, diagnostics)
+                linker_results.update(zip((entry[0] for entry in entries), results))
+        for index, interaction in enumerate(self.system.interactions):
+            result = linker_results[index] if index in linker_results else interaction.compute(self.system, context, diagnostics=diagnostics)
             for name, wrench in result.nodal_wrenches.items():
                 nodal[name].add_(wrench)
             for name, force in result.generalized_forces.items():
@@ -125,6 +138,16 @@ class Simulation:
     def finish(self) -> None:
         for observer in self.observers:
             observer.on_finish(self)
+        if self.output_dir is not None and self._initialized:
+            self.save_restart(Path(self.output_dir) / 'restart.pt')
+
+    def save_restart(self, path) -> None:
+        from FMBD.restart import save_restart
+        save_restart(self, path)
+
+    def load_restart(self, path):
+        from FMBD.restart import load_restart
+        return load_restart(self, path)
 
     def run(
         self,
@@ -140,11 +163,12 @@ class Simulation:
         """
         if n_steps is None:
             try:
-                n_steps = self.protocol.n_steps
+                n_steps = self.protocol.n_steps - (self.last_completed_step or 0)
             except AttributeError as exc:
                 raise ValueError("n_steps is required for a protocol without n_steps") from exc
         try:
-            for step in range(n_steps):
+            start_step = self.last_completed_step or 0
+            for step in range(start_step, start_step + n_steps):
                 diagnostics = diagnostics_every is not None and (step + 1) % diagnostics_every == 0
                 result = self.step(step, diagnostics=diagnostics)
                 if callback is not None:

@@ -14,6 +14,7 @@ class FMBDSystem:
     bodies: dict[str, Body] = field(default_factory=dict)
     interactions: list[Any] = field(default_factory=list)
     batch_bodies: bool = True
+    batch_linkers: bool = True
 
     def add_body(self, name: str, body: Body) -> None:
         if name in self.bodies:
